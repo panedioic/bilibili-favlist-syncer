@@ -1,0 +1,71 @@
+# ======================
+# 应用程序基础配置
+# ======================
+app:
+  name: "bilibili-collector"
+  env: "production"  # 环境类型 (development|staging|production)
+  port: 8080         # HTTP 服务监听端口
+  shutdown_timeout: 30s  # 优雅关闭超时时间
+
+# ======================
+# B站账号配置
+# ======================
+bilibili:
+  cookies:
+    SESSDATA: "YOUR_SESSDATA_HERE"    # 登录Cookie
+    bili_jct: "YOUR_BILI_JCT_HERE"    # CSRF Token
+    DedeUserID: "YOUR_USER_ID"        # 用户ID
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"  # 请求头
+
+# ======================
+# 下载配置
+# ======================
+download:
+  base_dir: "./downloads"     # 下载根目录
+  concurrent: 3               # 最大并发下载数
+  retry:
+    max_attempts: 5           # 最大重试次数
+    backoff: 2s               # 重试间隔
+  timeout: 30s                # 单个下载任务超时时间
+  naming_pattern: "{title}_{bvid}"  # 文件名格式
+  quality: 1080p              # 视频质量 (360p|480p|720p|1080p)
+  format: "mp4"               # 文件格式 (mp4|flv)
+
+# ======================
+# 定时任务配置
+# ======================
+schedule:
+  sync_interval: "1m"         # 同步间隔 (支持单位：s/m/h)
+  max_history: 100            # 保留的历史记录数
+  cleanup:
+    enabled: true             # 启用自动清理
+    keep_days: 30             # 保留天数
+
+# ======================
+# 网络代理配置
+# ======================
+proxy:
+  enabled: false
+  http: "http://proxy.example.com:8080"  # HTTP代理地址
+  https: ""                              # HTTPS代理地址
+  bypass: ["localhost", "127.0.0.1"]     # 代理排除列表
+
+# ======================
+# 日志配置
+# ======================
+log:
+  level: "info"               # 日志级别 (debug|info|warn|error)
+  path: "./logs"              # 日志目录
+  max_size: 100               # 单个日志文件大小上限(MB)
+  max_age: 30                 # 日志保留天数
+  compress: true              # 是否压缩旧日志
+  stdout: true                # 是否输出到控制台
+
+# ======================
+# 高级配置
+# ======================
+advanced:
+  debug_mode: false           # 启用调试模式
+  enable_pprof: false         # 是否启用性能监控
+  cache_ttl: 24h              # API响应缓存时间
+  rate_limit: 10              # B站API请求速率限制（次/秒）

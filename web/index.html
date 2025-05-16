@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Bilibili Favlist Syncer Demo</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; background: #f7f7f7; }
+    .video-list { display: flex; flex-wrap: wrap; gap: 16px; }
+    .video-card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #0001; width: 320px; padding: 12px; }
+    .video-card img { width: 100%; border-radius: 4px; }
+    .video-card h3 { margin: 8px 0 4px 0; font-size: 1.1em; }
+    .video-card .meta { font-size: 0.9em; color: #888; }
+    .player-modal { position: fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center; z-index:1000; }
+    .player-box { background:#fff; padding:20px; border-radius:8px; max-width:90vw; max-height:90vh; }
+    .player-box video { width: 640px; max-width:80vw; max-height:60vh; }
+    .close-btn { float:right; cursor:pointer; font-size:1.5em; color:#888; }
+    .favlist-form { margin-bottom: 2em; background: #fff; padding: 1em; border-radius: 8px; }
+    .favlist-form input { margin-right: 8px; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <h1>Bilibili Favlist Syncer Demo</h1>
+
+  <div class="favlist-form">
+    <h2>添加收藏夹</h2>
+    <input v-model="favlistForm.id" placeholder="收藏夹ID">
+    <button @click="addFavlist">添加</button>
+    <span v-if="favlistMsg" style="color:green">{{ favlistMsg }}</span>
+  </div>
+
+  <h2>视频列表</h2>
+  <div style="display: flex; align-items: center; margin-bottom: 1em;">
+    <button @click="loadVideos(1)">刷新</button>
+    <span style="margin: 0 1em;">第 {{ page }} 页</span>
+    <button @click="loadVideos(page-1)" :disabled="page<=1">上一页</button>
+    <button @click="loadVideos(page+1)" :disabled="videos.length < pageSize">下一页</button>
+    <!-- 搜索框 -->
+    <div style="margin-left:auto;">
+      <input
+        v-model="searchText"
+        @input="filterVideos"
+        placeholder="搜索视频标题/UP主/BV号"
+        style="padding: 4px 8px; border-radius: 4px; border: 1px solid #ccc;"
+      >
+    </div>
+  </div>
+  <div class="video-list">
+    <div class="video-card" v-for="video in filteredVideos" :key="video.bvid">
+      <img :src="video.cover" :alt="video.title">
+      <h3>{{ video.title }}</h3>
+      <div class="meta">BV号: {{ video.bvid }}</div>
+      <div class="meta">UP主: {{ video.uploader_name }}</div>
+      <div class="meta">时长: {{ formatDuration(video.duration) }}</div>
+      <button @click="playVideo(video)">播放</button>
+    </div>
+  </div>
+
+  <div v-if="showPlayer" class="player-modal" @click.self="closePlayer">
+    <div class="player-box">
+      <span class="close-btn" @click="closePlayer">&times;</span>
+      <h3>{{ currentVideo.title }}</h3>
+      <!-- 新增：视频详细信息 -->
+      <div v-if="videoDetail" style="margin-bottom:1em; background:#f7f7f7; color:#222; border-radius:6px; padding:10px;">
+        <div><b>BV号：</b>{{ videoDetail.BVID }}</div>
+        <div><b>UP主：</b>{{ videoDetail.UploaderName }}</div>
+        <div><b>简介：</b>{{ videoDetail.Desc }}</div>
+        <div><b>收藏夹ID：</b>{{ videoDetail.FavlistID }}</div>
+        <div><b>创建时间：</b>{{ videoDetail.CreatedAt }}</div>
+        <div><b>时长：</b>{{ formatDuration(videoDetail.Duration) }}</div>
+        <div><b>下载状态：</b>
+          <span v-if="videoDetail.IsDownloaded" style="color:green;">已下载</span>
+          <span v-else style="color:#888;">未下载</span>
+        </div>
+        <div><b>是否失效：</b>
+          <span v-if="videoDetail.IsInvalid" style="color:red;">已失效</span>
+          <span v-else style="color:green;">正常</span>
+        </div>
+        <div><b>是否移除：</b>
+          <span v-if="videoDetail.IsRemoved" style="color:red;">已移除</span>
+          <span v-else style="color:green;">未移除</span>
+        </div>
+      </div>
+      <video v-if="videoUrl" :src="videoUrl" controls autoplay></video>
+      <div v-else>正在加载视频地址...</div>
+    </div>
+  </div>
+
+  <!-- 美化后的系统日志区域 -->
+  <div style="margin-top:2em; background:#222; color:#eee; padding:1em; border-radius:8px; max-height:300px; overflow:auto; scrollbar-width:thin; scrollbar-color:#888 #222;">
+    <h3 style="color:#fff; display:flex; align-items:center;">
+      系统日志
+      <!-- 日志搜索框 -->
+      <input
+        v-model="logSearchText"
+        @input="filterLogs"
+        placeholder="搜索日志内容"
+        style="margin-left:1em; padding:2px 8px; border-radius:4px; border:1px solid #444; background:#111; color:#eee; font-size:0.95em;"
+      >
+      <label style="margin-left:1em; font-weight:normal; font-size:0.95em; display:flex; align-items:center;">
+        <input type="checkbox" v-model="hideLogApi" @change="filterLogs" style="margin-right:4px;">
+        屏蔽 /api/v1/logs
+      </label>
+      <!-- 刷新按钮 -->
+      <button @click="fetchLogs" style="margin-left:1em; padding:2px 10px; border-radius:4px; border:1px solid #444; background:#333; color:#fff; cursor:pointer;">
+        刷新
+      </button>
+      <!-- 自动刷新时间设置 -->
+      <span style="margin-left:1em; font-size:0.95em;">
+        自动刷新
+        <input type="number" v-model.number="logRefreshInterval" min="2" max="120" style="width:3em; margin:0 4px; border-radius:4px; border:1px solid #444; background:#111; color:#eee; padding:2px 4px;">
+        秒
+      </span>
+    </h3>
+    <table style="width:100%; font-size:0.95em; border-collapse:collapse;">
+      <thead>
+        <tr style="color:#aaa; border-bottom:1px solid #444;">
+          <th style="text-align:left;">时间</th>
+          <th style="text-align:left;">级别</th>
+          <th style="text-align:left;">消息</th>
+          <th style="text-align:left;">方法</th>
+          <th style="text-align:left;">路径</th>
+          <th style="text-align:left;">客户端</th>
+          <th style="text-align:left;">调用位置</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="log in filteredLogs" :key="log.ts + log.msg + log.caller">
+          <td>{{ log.ts }}</td>
+          <td>
+            <span :style="{color: log.level==='ERROR' ? '#ff5252' : (log.level==='WARN' ? '#ffd700' : '#4fc3f7')}">
+              {{ log.level }}
+            </span>
+          </td>
+          <td>{{ log.msg }}</td>
+          <td>{{ log.method || '-' }}</td>
+          <td>{{ log.path || '-' }}</td>
+          <td>{{ log.client || '-' }}</td>
+          <td style="font-size:0.9em;">{{ log.caller || '-' }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <style>
+      /* 针对系统日志区域的滚动条美化 */
+      .system-log-scrollbar::-webkit-scrollbar {
+        width: 8px;
+        background: #222;
+      }
+      .system-log-scrollbar::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 4px;
+      }
+    </style>
+  </div>
+</div>
+
+<script>
+const API_BASE = "/api/v1";
+const DOWNLOAD_BASE = "/downloads/";
+const app = Vue.createApp({
+  data() {
+    return {
+      videos: [],
+      page: 1,
+      pageSize: 12,
+      showPlayer: false,
+      currentVideo: {},
+      videoUrl: "",
+      videoDetail: null, // 新增
+      favlistForm: { id: "", name: "", cover: "" },
+      favlistMsg: "",
+      logs: [],
+      searchText: "",
+      filteredVideos: [],
+      // 日志相关
+      logSearchText: "",
+      hideLogApi: false,
+      filteredLogs: [],
+      logRefreshInterval: 15, // 自动刷新间隔（秒）
+      logTimer: null
+    }
+  },
+  computed: {
+    parsedLogs() {
+      return this.logs.map(str => {
+        try {
+          const obj = JSON.parse(str);
+          // console.log(obj)
+          return obj;
+        } catch {
+          return { ts: '', level: '', msg: str };
+        }
+      });
+    }
+  },
+  watch: {
+    logs() {
+      this.filterLogs();
+    },
+    logSearchText() {
+      this.filterLogs();
+    },
+    hideLogApi() {
+      this.filterLogs();
+    },
+    logRefreshInterval(newVal) {
+      // 自动刷新时间变化时重置定时器
+      this.resetLogTimer();
+    }
+  },
+  mounted() {
+    this.loadVideos(1);
+    this.fetchLogs();
+    this.resetLogTimer();
+  },
+  beforeUnmount() {
+    if (this.logTimer) clearInterval(this.logTimer);
+  },
+  methods: {
+    resetLogTimer() {
+      if (this.logTimer) clearInterval(this.logTimer);
+      // 限制最小2秒，最大120秒
+      let interval = Math.max(2, Math.min(this.logRefreshInterval, 120));
+      this.logTimer = setInterval(this.fetchLogs, interval * 1000);
+    },
+    async loadVideos(page) {
+      if (page < 1) return;
+      try {
+        const res = await axios.get(`${API_BASE}/videos?page=${page}&page_size=${this.pageSize}`);
+        this.videos = (res.data.videos || []).map(v => ({
+          id: v.ID,
+          bvid: v.BVID,
+          title: v.Title,
+          cover: v.Cover,
+          duration: v.Duration,
+          uploader_name: v.UploaderName,
+          uploader_face: v.UploaderFace,
+        }));
+        this.page = res.data.page || 1;
+        this.filterVideos();
+      } catch (e) {
+        this.videos = [];
+        this.filteredVideos = [];
+        alert("加载视频失败");
+      }
+    },
+    filterVideos() {
+      const kw = this.searchText.trim().toLowerCase();
+      if (!kw) {
+        this.filteredVideos = this.videos;
+        return;
+      }
+      this.filteredVideos = this.videos.filter(v =>
+        (v.title && v.title.toLowerCase().includes(kw)) ||
+        (v.uploader_name && v.uploader_name.toLowerCase().includes(kw)) ||
+        (v.bvid && v.bvid.toLowerCase().includes(kw))
+      );
+    },
+    formatDuration(sec) {
+      if (!sec) return "未知";
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${s.toString().padStart(2, "0")}`;
+    },
+    async playVideo(video) {
+      this.currentVideo = video;
+      this.showPlayer = true;
+      this.videoUrl = "";
+      this.videoDetail = null; // 清空旧详情
+      // 获取视频详细信息
+      try {
+        const detailRes = await axios.get(`${API_BASE}/video/${video.bvid}`);
+        if (detailRes.data) {
+          this.videoDetail = detailRes.data;
+        }
+      } catch {
+        this.videoDetail = null;
+      }
+      // 获取视频播放地址
+      try {
+        const localUrl = `${DOWNLOAD_BASE}${video.bvid}.flv`;
+        const resp = await fetch(localUrl, { method: "HEAD" });
+        if (resp.ok) {
+          this.videoUrl = localUrl;
+          return;
+        }
+      } catch {}
+      try {
+        const res = await axios.get(`${API_BASE}/video/${video.bvid}`);
+        if (res.data && res.data.download_url) {
+          this.videoUrl = res.data.download_url;
+        } else {
+          this.videoUrl = "";
+          alert("未找到可用视频地址");
+        }
+      } catch {
+        this.videoUrl = "";
+        alert("获取视频地址失败");
+      }
+    },
+    closePlayer() {
+      this.showPlayer = false;
+      this.currentVideo = {};
+      this.videoUrl = "";
+      this.videoDetail = null;
+    },
+    async addFavlist() {
+      if (!this.favlistForm.id) {
+        this.favlistMsg = "ID不能为空";
+        return;
+      }
+      try {
+        await axios.post(`${API_BASE}/favlist`, {
+          id: Number(this.favlistForm.id)
+        });
+        this.favlistMsg = "添加成功";
+        setTimeout(() => this.favlistMsg = "", 2000);
+      } catch {
+        this.favlistMsg = "添加失败";
+      }
+    },
+    async fetchLogs() {
+      try {
+        const res = await axios.get(`${API_BASE}/logs`);
+        this.logs = res.data.logs || [];
+      } catch {
+        this.logs = ["日志获取失败"];
+      }
+    },
+    filterLogs() {
+      const kw = this.logSearchText.trim().toLowerCase();
+      this.filteredLogs = this.parsedLogs.filter(log => {
+        // 屏蔽 /api/v1/logs
+        if (this.hideLogApi && log.path === "/api/v1/logs") return false;
+        // 搜索
+        if (!kw) return true;
+        return (
+          (log.ts && log.ts.toLowerCase().includes(kw)) ||
+          (log.level && log.level.toLowerCase().includes(kw)) ||
+          (log.msg && log.msg.toLowerCase().includes(kw)) ||
+          (log.method && log.method.toLowerCase().includes(kw)) ||
+          (log.path && log.path.toLowerCase().includes(kw)) ||
+          (log.client && log.client.toLowerCase().includes(kw)) ||
+          (log.caller && log.caller.toLowerCase().includes(kw))
+        );
+      });
+    }
+  }
+});
+app.mount("#app");
+</script>
+</body>
+</html>
