@@ -12,6 +12,7 @@ import (
 
 	"github.com/CuteReimu/bilibili/v2"
 	"github.com/panedioic/bilibili-favlist-syncer/internal/config"
+	"github.com/panedioic/bilibili-favlist-syncer/internal/db"
 	"github.com/panedioic/bilibili-favlist-syncer/utils"
 	"go.uber.org/zap"
 )
@@ -30,6 +31,7 @@ type Task struct {
 	ID        string
 	BVID      string
 	Title     string
+	Cover     string // 新增：封面信息
 	Progress  float64
 	Status    TaskStatus
 	CreatedAt time.Time
@@ -47,9 +49,10 @@ type Downloader struct {
 	logger         utils.Logger
 	workerWg       sync.WaitGroup
 	bilibiliClient *bilibili.Client
+	db             *db.DB
 }
 
-func NewDownloader(cfg *config.Config, logger utils.Logger, client *bilibili.Client) *Downloader {
+func NewDownloader(cfg *config.Config, logger utils.Logger, client *bilibili.Client, database *db.DB) *Downloader {
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Downloader{
 		tasks:          make(map[string]*Task),
@@ -59,6 +62,7 @@ func NewDownloader(cfg *config.Config, logger utils.Logger, client *bilibili.Cli
 		cfg:            cfg,
 		logger:         logger,
 		bilibiliClient: client,
+		db:             database,
 	}
 
 	// 启动工作池
@@ -71,10 +75,18 @@ func NewDownloader(cfg *config.Config, logger utils.Logger, client *bilibili.Cli
 }
 
 func (m *Downloader) AddTask(bvid, title string) string {
+	cover := ""
+	// 如果db可用，尝试获取封面
+	if m.db != nil {
+		if v, err := m.db.GetVideoByBVID(bvid); err == nil && v != nil {
+			cover = v.Cover
+		}
+	}
 	task := &Task{
 		ID:        generateTaskID(bvid),
 		BVID:      bvid,
 		Title:     title,
+		Cover:     cover, // 新增
 		Status:    StatusQueued,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -270,19 +282,6 @@ func (m *Downloader) ListTasks() []*Task {
 	return tasks
 }
 
-func (m *Downloader) CancelTask(taskID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	task, exists := m.tasks[taskID]
-	if !exists || task.Status != StatusDownloading {
-		return false
-	}
-
-	m.updateTaskStatus(taskID, StatusCanceled, task.Progress)
-	return true
-}
-
 func (m *Downloader) Shutdown() {
 	m.logger.Info("正在关闭下载管理器...")
 	m.cancel()
@@ -317,7 +316,24 @@ func (m *Downloader) completeTask(task *Task) {
 	m.logger.Info("任务下载完成",
 		zap.String("task_id", task.ID),
 		zap.String("bvid", task.BVID),
+		zap.String("title", task.Title),
 	)
+	if m.db != nil {
+		err := m.db.UpdateVideoDownloaded(task.BVID, true)
+		if err != nil {
+			m.logger.Error("更新数据库失败", zap.Error(err))
+		}
+	} else {
+		m.logger.Warn("数据库不可用，无法更新下载状态")
+	}
+	// 再查询一下数据库
+	videoInfo, _ := m.db.GetVideoByBVID(task.BVID)
+	if videoInfo != nil {
+		m.logger.Info("视频信息",
+			zap.String("bvid", videoInfo.BVID),
+			zap.Bool("downloaded", videoInfo.IsDownloaded),
+		)
+	}
 }
 
 func (m *Downloader) failTask(task *Task, err error) {
@@ -341,15 +357,18 @@ func (m *Downloader) GetActiveTaskByBVID(bvid string) *Task {
 	}
 	return nil
 }
+
 func (m *Downloader) ListActiveTasks() []*Task {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	activeTasks := make([]*Task, 0)
 	for _, task := range m.tasks {
-		if task.Status == StatusDownloading {
-			activeTasks = append(activeTasks, copyTask(task))
-		}
+		// 返回正在下载和等待队列中的任务
+		activeTasks = append(activeTasks, copyTask(task))
+		// if task.Status == StatusDownloading || task.Status == StatusQueued {
+		// 	activeTasks = append(activeTasks, copyTask(task))
+		// }
 	}
 	return activeTasks
 }
@@ -364,6 +383,7 @@ func copyTask(t *Task) *Task {
 		ID:        t.ID,
 		BVID:      t.BVID,
 		Title:     t.Title,
+		Cover:     t.Cover, // 新增
 		Progress:  t.Progress,
 		Status:    t.Status,
 		CreatedAt: t.CreatedAt,

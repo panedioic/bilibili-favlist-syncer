@@ -21,7 +21,8 @@ import (
 )
 
 // run: go run cmd/server/main.go
-// build: go build -o bilibili-favlist-syncer cmd/server/main.go
+// go env -w CGO_ENABLED=1
+// build: go build -o bfs.exe cmd/server/main.go
 // Check status: curl -f http://localhost:8080/healthz
 
 func main() {
@@ -34,13 +35,17 @@ func main() {
 	logger := utils.NewLogger(cfg.Log.Level)
 	defer logger.Sync()
 
-	db, _ := db.NewDB("favlist.db")
+	db, err := db.NewDB("favlist.db")
+	if err != nil {
+		logger.Error("初始化数据库失败", zap.Error(err))
+		return
+	}
 
 	// 初始化bilibili客户端
 	biliClient := bilibili.New()
 
 	// 初始化downloader
-	downloader := downloader.NewDownloader(cfg, logger, biliClient)
+	downloader := downloader.NewDownloader(cfg, logger, biliClient, db)
 
 	// 新增：启动每个收藏夹的 watcher
 	favlists, err := db.ListFavlists()
