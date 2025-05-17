@@ -56,7 +56,7 @@ func NewDownloader(cfg *config.Config, logger utils.Logger, client *bilibili.Cli
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Downloader{
 		tasks:          make(map[string]*Task),
-		queue:          make(chan *Task, cfg.Download.Concurrent*2),
+		queue:          make(chan *Task, 1000),
 		ctx:            ctx,
 		cancel:         cancel,
 		cfg:            cfg,
@@ -99,7 +99,7 @@ func (m *Downloader) AddTask(bvid, title string) string {
 	select {
 	case m.queue <- task:
 	default:
-		m.logger.Warn("下载队列已满，任务进入等待", zap.String("task_id", task.ID))
+		m.logger.Error("下载队列已满，任务进入等待", zap.String("task_id", task.ID))
 	}
 
 	m.logger.Info("添加下载任务",
@@ -112,8 +112,12 @@ func (m *Downloader) AddTask(bvid, title string) string {
 }
 
 func (m *Downloader) worker(_ int) {
-	defer m.workerWg.Done()
-
+	defer func() {
+		if r := recover(); r != nil {
+			m.logger.Error("worker panic", zap.Any("recover", r))
+		}
+		m.workerWg.Done()
+	}()
 	for {
 		select {
 		case <-m.ctx.Done():
