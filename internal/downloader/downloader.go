@@ -124,6 +124,7 @@ func (m *Downloader) worker(_ int) {
 			return
 		case task := <-m.queue:
 			m.processTask(task)
+			time.Sleep(10 * time.Second) // 模拟下载间隔
 		}
 	}
 }

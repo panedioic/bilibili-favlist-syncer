@@ -83,6 +83,7 @@ func (fw *Watcher) checkForNewVideos(_ context.Context) {
 	}
 
 	for page := 1; page <= totalPages; page++ {
+		time.Sleep(1 * time.Second) // 避免请求过快
 		fl, err := fw.bilibiliClient.GetFavourList(bilibili.GetFavourListParam{
 			MediaId: fw.favlistID,
 			Ps:      pageSize,
